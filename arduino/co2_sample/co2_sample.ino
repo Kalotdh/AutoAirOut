@@ -13,7 +13,8 @@ void setup() {
 }
 
 void loop() {
-zddddz
+  int co2 = readCO2();
+  Serial.println(co2);
   delay(1000);
 }
 
