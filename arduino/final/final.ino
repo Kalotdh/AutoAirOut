@@ -1,63 +1,58 @@
-//상태
-////모드 설정
-int modeReal;
-int modeShow;
-
-const int modeReal_Pin = 51;
-const int modeShow_Pin = 53;
-
-////창문 상태
-const int CLOSED = 0;
-const int OPENED = 1;
-
-
-//입력
-////버튼
-const int Control_Pin = 4;
-
-////미세먼지
+//센서:
+////PMS
 #define PMS_HEAD_1 0x42
 #define PMS_HEAD_2 0x4d
-
 int inDoorPms[4] = { 0, 0, 0, 0 };
 int outDoorPms[4] = { 0, 0, 0, 0 };
-
 String inDoorPMS;
 String outDoorPMS;
 
-////이산화탄소
+////CO2
 #include <MHZ19PWM.h>
 const int MHZ19_Pin = 2;
 MHZ19PWM mhz(MHZ19_Pin, MHZ_CONTINUOUS_MODE);
 
-////소음
+const int modeRead_Pin = 51;
+const int modeShow_Pin = 53;
+
+int modeReal;
+int modeShow;
+
+
+////Noise
 const int noise_Pin = A0;
 int noise;
 
-////라즈베리파이
-const int PI_PIN = 11;
+//환기:
+////창문 상태 
+const int CLOSED = 0;
+const int OPENED = 1;
 
-
-//출력
-////창문 모터
+////Servo
 #include <Servo.h>
 Servo windowServo;
 const int SERVO_PIN = 3;
 int windowStatus = CLOSED;
-const int CLOSED_WINDOW_ANGLE = 0;
-const int OPENED_WINDOW_ANGLE = 90;
 
-////환풍기
+////Motor
 int FAN_IN_1 = 7;
 int FAN_IN_2 = 6;
 int fanStatus = CLOSED;
 
+////Button
+const int HG_BT_PIN = 4;
+
+//표시:
 ////LCD
 #include <LiquidCrystal_I2C.h>
 LiquidCrystal_I2C lcd(0x27, 16, 2);
 
+//카메라:
+//Raspberry Pi
+const int PI_PIN = 11;
 
-//임계값
+
+//기준치
 int IndoorLimit;
 int OutdoorLimit;
 int CO2Limit;
@@ -73,40 +68,42 @@ int CO2Limit_Show = 500;
 
 
 
+
 void setup() {
-  //메인 시리얼
+  //Serial
   Serial.begin(115200);
 
-  //모드
-  pinMode(modeReal_Pin, INPUT);
-  pinMode(modeShow_Pin, INPUT);
+  //PMS
+  Serial2.begin(9600);  //indoor // tx2
+  Serial3.begin(9600);  //outdoor // tx3
 
-  //버튼
-  pinMode(Control_Pin, INPUT);
+  //Servo
+  windowServo.attach(SERVO_PIN);  // attaches the servo on pin 9 to the servo object
 
-  //PMS5003 센서 시리얼
-  Serial2.begin(9600);  //실내 PMS5003|tx2
-  Serial3.begin(9600);  //실외 PMS5003|tx3
-
-  //CO2
-  mhz.useLimit(5000);
-  closeWindow();
-
-  //라즈베리 파이
-  pinMode(PI_PIN, INPUT);
-
-  //창문 모터
-  windowServo.attach(SERVO_PIN);
-
-  //환풍기
+  //Motor
   pinMode(FAN_IN_1, OUTPUT);
   pinMode(FAN_IN_2, OUTPUT);
+
+  //Button
+  pinMode(HG_BT_PIN, INPUT);
+
+
+  //Raspberry Pi
+  pinMode(PI_PIN, INPUT);
+
+
+  Serial.println("--------start--------");
 
   //LCD
   lcd.init();
   lcd.backlight();
   
-  Serial.println("--------start--------");
+  //CO2
+  mhz.useLimit(5000);
+  closeWindow();
+
+  pinMode(modeRead_Pin, INPUT);
+  pinMode(modeShow_Pin, INPUT);
 }
 
 void loop() {
@@ -121,20 +118,18 @@ void loop() {
   int noise = analogRead(noise_Pin);
 
   //환기버튼 인식
-  int Control = digitalRead(Control_Pin);
+  int hg_bt = digitalRead(HG_BT_PIN);
 
   //잠자는 사람 감지
   int pi_bt = digitalRead(PI_PIN);
 
-  int modeReal = digitalRead(modeReal_Pin);
+  int modeReal = digitalRead(modeRead_Pin);
   int modeShow = digitalRead(modeShow_Pin);
 
-/*
   Serial.print("Real:");
   Serial.print(modeReal);
   Serial.print("Show:");
   Serial.println(modeShow);
-*/
 
   if(modeReal == 0 && modeShow == 0){
 
@@ -152,10 +147,11 @@ void loop() {
 
 
     //버튼 눌렀을 때 밖 미세먼지 측정 후 창문 열기
-    if (Control == 1) {
+    if (hg_bt == 1) {
       Serial.println("버튼 on");
       //창문 열렸는지 확인하고 열리면 닫고
       //닫히면 외부 미먼 측정하고 ㄱㅊ으면 열고
+      //아니면 닫고
       if (readWindowStatus() == OPENED) {
         closeWindow();
 
@@ -164,6 +160,13 @@ void loop() {
       }
 
     } else {
+
+      // Serial.print("PMS ");
+      // Serial.print("indoor ");
+      // Serial.print(inDoorPms[3]);
+      // Serial.print(" outdoor ");
+      // Serial.println(outDoorPms[3]);
+
       if (outDoorPms[3] > 50) {
         Serial.print("집밖의 미세먼지가 높아서 창을 닫음");
         Serial.println(outDoorPms[3]);
@@ -198,6 +201,9 @@ void loop() {
 }
 
 void cleanAir() {
+  Serial.print("환기하기 : ");
+  Serial.println(outDoorPms[3]);
+
   if (outDoorPms[3] <= 50) {
     openWindow();
   } else {
@@ -205,11 +211,16 @@ void cleanAir() {
   }
 }
 
-
+/*
+ 팬을 열고 닫고 하는 부분
+*/
+int readFanStatus() {
+  return fanStatus;
+}
 
 void openFan(int timeout) {
   lcdrender(1, String("Fan is Running"));
-  if (fanStatus == CLOSED) {
+  if (readFanStatus() == CLOSED) {
     digitalWrite(FAN_IN_1, HIGH);
     digitalWrite(FAN_IN_2, LOW);
     fanStatus = OPENED;
@@ -229,8 +240,8 @@ void closeFan() {
 /*
  창을 열고 닫기
 */
-
-
+const int CLOSED_WINDOW_ANGLE = 0;
+const int OPENED_WINDOW_ANGLE = 90;
 int readWindowStatus() {
   if (windowServo.read() == OPENED_WINDOW_ANGLE) {
     windowStatus = OPENED;
