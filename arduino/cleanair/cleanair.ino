@@ -1,127 +1,203 @@
-#include <Servo.h>
-#include <LiquidCrystal_I2C.h>
+//상태
+////모드 설정
+int modeReal;
+int modeShow;
 
-//pms
-#define PMS_HEAD_1 0x42
-#define PMS_HEAD_2 0x4d
-int inDoorPms[4] = { 0, 0, 0, 0 };
-int outDoorPms[4] = { 0, 0, 0, 0 };
+const int modeReal_Pin = 51;
+const int modeShow_Pin = 53;
 
+////창문 상태
 const int CLOSED = 0;
 const int OPENED = 1;
 
-//window
-Servo windowServo;
-const int SERVO_PIN = 3;
-int windowStatus = CLOSED;
 
-//fan
-int FAN_IN_1 = 7;
-int FAN_IN_2 = 6;
-int fanStatus = CLOSED;
+//입력
+////버튼
+const int Control_Pin = 4;
 
-//환기button
-const int HG_BT_PIN = 4;
+////미세먼지
+#define PMS_HEAD_1 0x42
+#define PMS_HEAD_2 0x4d
 
-//미세먼지 표시 lcd
-LiquidCrystal_I2C lcd(0x27, 16, 2);
-
-
-//Rasberry pi
-const int PI_PIN = 11;
+int inDoorPms[4] = { 0, 0, 0, 0 };
+int outDoorPms[4] = { 0, 0, 0, 0 };
 
 String inDoorPMS;
 String outDoorPMS;
 
+////이산화탄소
+#include <MHZ19PWM.h>
+const int MHZ19_Pin = 2;
+MHZ19PWM mhz(MHZ19_Pin, MHZ_CONTINUOUS_MODE);
+
+////소음
+const int noise_Pin = A0;
+int noise;
+
+////라즈베리파이
+const int PI_PIN = 11;
+
+
+//출력
+////창문 모터
+#include <Servo.h>
+Servo windowServo;
+const int SERVO_PIN = 3;
+int windowStatus = CLOSED;
+const int CLOSED_WINDOW_ANGLE = 0;
+const int OPENED_WINDOW_ANGLE = 90;
+
+////환풍기
+int FAN_IN_1 = 7;
+int FAN_IN_2 = 6;
+int fanStatus = CLOSED;
+
+////LCD
+#include <LiquidCrystal_I2C.h>
+LiquidCrystal_I2C lcd(0x27, 16, 2);
+
+
+//임계값
+int IndoorLimit;
+int OutdoorLimit;
+int CO2Limit;
+
+int IndoorLimit_Real = 75;
+int OutdoorLimit_Real = 82;
+
+int IndoorLimit_Show = 50;
+int OutdoorLimit_Show = 50;
+
+int CO2Limit_Real = 1000;
+int CO2Limit_Show = 500;
+
+
+
 void setup() {
+  //메인 시리얼
   Serial.begin(115200);
 
-  //pms
-  Serial2.begin(9600);  //indoor // tx2
-  Serial3.begin(9600);  //outdoor // tx3
+  //모드
+  pinMode(modeReal_Pin, INPUT);
+  pinMode(modeShow_Pin, INPUT);
 
-  //servo
-  windowServo.attach(SERVO_PIN);  // attaches the servo on pin 9 to the servo object
+  //버튼
+  pinMode(Control_Pin, INPUT);
 
-  //fan
+  //PMS5003 센서 시리얼
+  Serial2.begin(9600);  //실내 PMS5003|tx2
+  Serial3.begin(9600);  //실외 PMS5003|tx3
+
+  //CO2
+  mhz.useLimit(5000);
+  closeWindow();
+
+  //라즈베리 파이
+  pinMode(PI_PIN, INPUT);
+
+  //창문 모터
+  windowServo.attach(SERVO_PIN);
+
+  //환풍기
   pinMode(FAN_IN_1, OUTPUT);
   pinMode(FAN_IN_2, OUTPUT);
 
-  //HG BT
-  pinMode(HG_BT_PIN, INPUT);
-
-
-  //라즈베리 파이 핀
-  pinMode(PI_PIN, INPUT);
-
-
-  Serial.println("start-------------");
-
-  //lcd
+  //LCD
   lcd.init();
   lcd.backlight();
   
-  closeWindow();
+  Serial.println("--------start--------");
 }
 
 void loop() {
 
-  //미세먼지 상태 측정
+  //미세먼지 농도 읽기
   readIndoorPms();   //집안
   readOutDoorPms();  //집밖
+  
+  //CO2 농도 읽기
+  int CO2 = mhz.getCO2();
+
+  int noise = analogRead(noise_Pin);
 
   //환기버튼 인식
-  int hg_bt = digitalRead(HG_BT_PIN);
+  int Control = digitalRead(Control_Pin);
 
-  //라즈베리파이 인식
+  //잠자는 사람 감지
   int pi_bt = digitalRead(PI_PIN);
 
-  //버튼 눌렀을 때 밖 미세먼지 측정 후 창문 열기
-  if (hg_bt == 1) {
-    Serial.println("버튼 on");
-    //창문 열렸는지 확인하고 열리면 닫고
-    //닫히면 외부 미먼 측정하고 ㄱㅊ으면 열고
-    //아니면 닫고
-    if (readWindowStatus() == OPENED) {
-      closeWindow();
+  int modeReal = digitalRead(modeReal_Pin);
+  int modeShow = digitalRead(modeShow_Pin);
 
-    } else if (readWindowStatus() == CLOSED) {
-      cleanAir();
-    }
+/*
+  Serial.print("Real:");
+  Serial.print(modeReal);
+  Serial.print("Show:");
+  Serial.println(modeShow);
+*/
+
+  if(modeReal == 0 && modeShow == 0){
 
   } else {
 
-    // Serial.print("PMS ");
-    // Serial.print("indoor ");
-    // Serial.print(inDoorPms[3]);
-    // Serial.print(" outdoor ");
-    // Serial.println(outDoorPms[3]);
-
-    if (outDoorPms[3] > 50) {
-      Serial.print("집밖의 미세먼지가 높아서 창을 닫음");
-      Serial.println(outDoorPms[3]);
-      closeWindow();
+    if(modeReal == 1) {
+      IndoorLimit = IndoorLimit_Real;
+      OutdoorLimit = OutdoorLimit_Real;
+      CO2Limit = CO2Limit_Real;
+    } else if(modeShow == 1) {
+      IndoorLimit = IndoorLimit_Show;
+      OutdoorLimit = OutdoorLimit_Show;
+      CO2Limit = CO2Limit_Show;
     }
 
-    if (pi_bt == 1) {  // 라즈베리 파이로 판단
-      Serial.print("잠자서 환기 ");
-      cleanAir();
-    }
-    
-    if (inDoorPms[3] > 80) {  // 집안 미세먼지 높음
-      Serial.print("집안의 미세먼지가 높아서 환기 ");
-      Serial.println(inDoorPms[3]);
-      cleanAir();
+
+    //버튼 눌렀을 때 밖 미세먼지 측정 후 창문 열기
+    if (Control == 1) {
+      Serial.println("버튼 on");
+      //창문 열렸는지 확인하고 열리면 닫고
+      //닫히면 외부 미먼 측정하고 ㄱㅊ으면 열고
+      if (readWindowStatus() == OPENED) {
+        closeWindow();
+
+      } else if (readWindowStatus() == CLOSED) {
+        cleanAir();
+      }
+
+    } else {
+      if (outDoorPms[3] > 50) {
+        Serial.print("집밖의 미세먼지가 높아서 창을 닫음");
+        Serial.println(outDoorPms[3]);
+        closeWindow();
+      }
+
+      if (pi_bt == 1) {  // 라즈베리 파이로 판단
+        Serial.print("잠자서 환기 ");
+        cleanAir();
+      }
+
+      if (inDoorPms[3] > 80) {  // 집안 미세먼지 높음
+        Serial.print("집안의 미세먼지가 높아서 환기 ");
+        Serial.println(inDoorPms[3]);
+        cleanAir();
+      }
+
+
+      if (CO2 > 1000) {
+        Serial.println("co2 높음");
+        cleanAir();
+      }
+
+      if (noise > 1000) {
+        Serial.println("소음 심함");
+        closeWindow();
+      }
+
+    delay(100);
     }
   }
-
-  delay(100);
 }
 
 void cleanAir() {
-  Serial.print("환기하기 : ");
-  Serial.println(outDoorPms[3]);
-
   if (outDoorPms[3] <= 50) {
     openWindow();
   } else {
@@ -129,16 +205,11 @@ void cleanAir() {
   }
 }
 
-/*
- 팬을 열고 닫고 하는 부분
-*/
-int readFanStatus() {
-  return fanStatus;
-}
+
 
 void openFan(int timeout) {
   lcdrender(1, String("Fan is Running"));
-  if (readFanStatus() == CLOSED) {
+  if (fanStatus == CLOSED) {
     digitalWrite(FAN_IN_1, HIGH);
     digitalWrite(FAN_IN_2, LOW);
     fanStatus = OPENED;
@@ -158,8 +229,8 @@ void closeFan() {
 /*
  창을 열고 닫기
 */
-const int CLOSED_WINDOW_ANGLE = 0;
-const int OPENED_WINDOW_ANGLE = 90;
+
+
 int readWindowStatus() {
   if (windowServo.read() == OPENED_WINDOW_ANGLE) {
     windowStatus = OPENED;
@@ -183,6 +254,7 @@ void closeWindow() {
     windowServo.write(CLOSED_WINDOW_ANGLE);
     delay(500);
   }
+  Serial.println("come");
 }
 
 
