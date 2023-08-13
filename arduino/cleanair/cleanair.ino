@@ -12,8 +12,8 @@ const int OPENED = 1;
 
 
 //입력
-////버튼
-const int Control_Pin = 4;
+////환기 버튼
+const int CONTROL_PIN = 4;
 
 ////미세먼지
 #define PMS_HEAD_1 0x42
@@ -22,16 +22,13 @@ const int Control_Pin = 4;
 int inDoorPms[4] = { 0, 0, 0, 0 };
 int outDoorPms[4] = { 0, 0, 0, 0 };
 
-String inDoorPMS;
-String outDoorPMS;
-
-////이산화탄소
+////CO2
 #include <MHZ19PWM.h>
-const int MHZ19_Pin = 2;
-MHZ19PWM mhz(MHZ19_Pin, MHZ_CONTINUOUS_MODE);
+const int MHZ19_PIN = 2;
+MHZ19PWM mhz(MHZ19_PIN, MHZ_CONTINUOUS_MODE);
 
 ////소음
-const int noise_Pin = A0;
+const int NOISE_PIN = A8;
 int noise;
 
 ////라즈베리파이
@@ -54,49 +51,53 @@ int fanStatus = CLOSED;
 
 ////LCD
 #include <LiquidCrystal_I2C.h>
-LiquidCrystal_I2C lcd(0x27, 16, 2);
+LiquidCrystal_I2C lcd(0x27, 20, 4);
 
 
 //임계값
-int IndoorLimit;
-int OutdoorLimit;
-int CO2Limit;
-
-int IndoorLimit_Real = 75;
-int OutdoorLimit_Real = 82;
-
+int IndoorLimit_Real = 50;
 int IndoorLimit_Show = 50;
+
+int OutdoorLimit_Real = 50;
 int OutdoorLimit_Show = 50;
 
-int CO2Limit_Real = 1000;
-int CO2Limit_Show = 500;
+int CO2Limit_Real = 1500;
+int CO2Limit_Show = 5000;
 
+int NoiseLimit_Real = 1024;
+int NoiseLimit_Show = 1024;
+
+int IndoorLimit = IndoorLimit_Real;
+int OutdoorLimit = OutdoorLimit_Real;
+int CO2Limit = CO2Limit_Real;
+int NoiseLimit = CO2Limit_Real;
 
 
 void setup() {
   //메인 시리얼
-  Serial.begin(115200);
+  Serial.begin(9600);
 
   //모드
   pinMode(modeReal_Pin, INPUT);
   pinMode(modeShow_Pin, INPUT);
+  pinMode(NOISE_PIN, INPUT);
 
-  //버튼
-  pinMode(Control_Pin, INPUT);
+  //환기 버튼
+  pinMode(CONTROL_PIN, INPUT);
 
-  //PMS5003 센서 시리얼
-  Serial2.begin(9600);  //실내 PMS5003|tx2
-  Serial3.begin(9600);  //실외 PMS5003|tx3
+  //미세먼지
+  Serial2.begin(9600);  //실내
+  Serial3.begin(9600);  //실외
 
   //CO2
   mhz.useLimit(5000);
-  closeWindow();
 
   //라즈베리 파이
   pinMode(PI_PIN, INPUT);
 
   //창문 모터
   windowServo.attach(SERVO_PIN);
+  closeWindow();
 
   //환풍기
   pinMode(FAN_IN_1, OUTPUT);
@@ -110,33 +111,37 @@ void setup() {
 }
 
 void loop() {
-
-  //미세먼지 농도 읽기
-  readIndoorPms();   //집안
-  readOutDoorPms();  //집밖
-  
-  //CO2 농도 읽기
-  int CO2 = mhz.getCO2();
-
-  int noise = analogRead(noise_Pin);
-
-  //환기버튼 인식
-  int Control = digitalRead(Control_Pin);
-
-  //잠자는 사람 감지
-  int pi_bt = digitalRead(PI_PIN);
-
+  //모드
   int modeReal = digitalRead(modeReal_Pin);
   int modeShow = digitalRead(modeShow_Pin);
 
-/*
-  Serial.print("Real:");
-  Serial.print(modeReal);
-  Serial.print("Show:");
-  Serial.println(modeShow);
-*/
+  //미세먼지
+  readIndoorPms();   //집안
+  readOutDoorPms();  //집밖
 
-  if(modeReal == 0 && modeShow == 0){
+  //CO2
+  int CO2 = mhz.getCO2();
+  //소음
+  int noise = analogRead(NOISE_PIN);
+
+  String co2noise = "CO2: " + String(CO2) + " NOE: "  + String(noise);
+  Serial.println(co2noise);
+  lcdrender(0, 2, co2noise);
+
+  //환기 버튼
+  int controlBtn = digitalRead(CONTROL_PIN);
+
+  //라즈베리 파이
+  int piBtn = digitalRead(PI_PIN);
+
+  Serial.println("PI : " + String(piBtn));
+
+  Serial.println("Mode : " + String(modeReal) + " : " + String(modeShow));
+
+  //판단
+  if (modeReal == 0 && modeShow == 0){
+    Serial.println("nope");
+    delay(200);
 
   } else {
 
@@ -144,61 +149,64 @@ void loop() {
       IndoorLimit = IndoorLimit_Real;
       OutdoorLimit = OutdoorLimit_Real;
       CO2Limit = CO2Limit_Real;
-    } else if(modeShow == 1) {
+      NoiseLimit = NoiseLimit_Real;
+
+    } else if (modeShow == 1) {
       IndoorLimit = IndoorLimit_Show;
       OutdoorLimit = OutdoorLimit_Show;
       CO2Limit = CO2Limit_Show;
+      NoiseLimit = NoiseLimit_Show;
     }
 
-
     //버튼 눌렀을 때 밖 미세먼지 측정 후 창문 열기
-    if (Control == 1) {
+    if (controlBtn == 1) {
       Serial.println("버튼 on");
-      //창문 열렸는지 확인하고 열리면 닫고
-      //닫히면 외부 미먼 측정하고 ㄱㅊ으면 열고
       if (readWindowStatus() == OPENED) {
         closeWindow();
-
       } else if (readWindowStatus() == CLOSED) {
         cleanAir();
       }
-
     } else {
-      if (outDoorPms[3] > 50) {
-        Serial.print("집밖의 미세먼지가 높아서 창을 닫음");
-        Serial.println(outDoorPms[3]);
+
+
+
+      // 잠자는 학생이 있으면
+      if (piBtn == 1) {  // 라즈베리 파이로 판단
+        Serial.print("catch sleep");
+        cleanAir();
+      }
+      
+      //집안 미세먼지가 높으면 창을 열거나 환풍
+      if (inDoorPms[3] > IndoorLimit) {  // 집안 미세먼지 높음
+        Serial.print("IndoorLimit : " + String(inDoorPms[3]));
+        cleanAir();
+      }
+
+      //co2가 높으면 높으면 창을 열거나 환풍
+      if (CO2 > CO2Limit) {
+        Serial.println("CO2Limit : " + String(CO2));
+        cleanAir();
+      }
+
+      //밖의 미세먼지가 높으면 창문 닫기
+      if (outDoorPms[3] > OutdoorLimit) {
+        Serial.print("OutdoorLimit");
         closeWindow();
       }
 
-      if (pi_bt == 1) {  // 라즈베리 파이로 판단
-        Serial.print("잠자서 환기 ");
-        cleanAir();
-      }
-
-      if (inDoorPms[3] > 80) {  // 집안 미세먼지 높음
-        Serial.print("집안의 미세먼지가 높아서 환기 ");
-        Serial.println(inDoorPms[3]);
-        cleanAir();
-      }
-
-
-      if (CO2 > 1000) {
-        Serial.println("co2 높음");
-        cleanAir();
-      }
-
-      if (noise > 1000) {
-        Serial.println("소음 심함");
+      //시끄러우면 창닫기
+      if (noise > NoiseLimit) {
+        Serial.println("Noise Limit : " + String(noise));
         closeWindow();
       }
 
-    delay(100);
     }
   }
+  delay(500);
 }
 
 void cleanAir() {
-  if (outDoorPms[3] <= 50) {
+  if (outDoorPms[3] <= OutdoorLimit) {
     openWindow();
   } else {
     openFan(3000);
@@ -206,61 +214,58 @@ void cleanAir() {
 }
 
 
-
+//환기
+////환풍기 작동
 void openFan(int timeout) {
-  lcdrender(1, String("Fan is Running"));
-  if (fanStatus == CLOSED) {
-    digitalWrite(FAN_IN_1, HIGH);
-    digitalWrite(FAN_IN_2, LOW);
-    fanStatus = OPENED;
-    delay(timeout);
-    closeFan();
-  }
+  lcdrender(0, 3, String("Fan is Running"));
+  Serial.println("fan");
+  digitalWrite(FAN_IN_1, HIGH);
+  digitalWrite(FAN_IN_2, LOW);
+  delay(timeout);
+  digitalWrite(FAN_IN_1, LOW);
+  digitalWrite(FAN_IN_2, LOW);
 }
 
-void closeFan() {
-  if (readFanStatus() == OPENED) {
-    digitalWrite(FAN_IN_1, LOW);
-    digitalWrite(FAN_IN_2, LOW);
-    fanStatus = CLOSED;
-  }
-}
 
-/*
- 창을 열고 닫기
-*/
-
-
+////창문 상태 읽기
 int readWindowStatus() {
-  if (windowServo.read() == OPENED_WINDOW_ANGLE) {
+  int windowAngle = windowServo.read();
+  Serial.println(windowAngle);
+  if (windowAngle == OPENED_WINDOW_ANGLE) {
     windowStatus = OPENED;
-  } else if (windowServo.read() == CLOSED_WINDOW_ANGLE) {
+  } else if (windowAngle == CLOSED_WINDOW_ANGLE) {
     windowStatus = CLOSED;
+  } else {
+    windowStatus = CLOSED;
+    windowServo.write(CLOSED_WINDOW_ANGLE);
+    delay(500);
   }
   return windowStatus;
 }
 
+////창문 열기
 void openWindow() {
   if (readWindowStatus() == CLOSED) {
-    lcdrender(1, String("Open the Window"));
+    lcdrender(0, 3, String("Open the Window"));
     windowServo.write(OPENED_WINDOW_ANGLE);
     delay(500);
   }
+  Serial.println("Open the Window");
 }
 
+////창문 닫기
 void closeWindow() {
   if (readWindowStatus() == OPENED) {
-  lcdrender(1, String("Close the Window"));
+  lcdrender(0, 3, String("Close the Window"));
     windowServo.write(CLOSED_WINDOW_ANGLE);
     delay(500);
   }
-  Serial.println("come");
+  Serial.println("close the window");
 }
 
 
-/*
- 미세먼지 측정하기
-*/
+//미세먼지
+////실내 미세먼지
 void readIndoorPms() {
   unsigned char pms[32];
   if (Serial2.available() >= 32) { 
@@ -287,9 +292,11 @@ void readIndoorPms() {
   }
 
   String inDoorPMS = String("I N: ") + String(inDoorPms[3]) + String(" ") + String(inDoorPms[2]) + String(" ") + String(inDoorPms[1]);
-  lcdrender(0, inDoorPMS);
+  lcdrender(0, 0, inDoorPMS);
+  Serial.println(inDoorPMS);
 }
 
+////실외 미세먼지
 void readOutDoorPms() {
   unsigned char pms2[32];
   if (Serial3.available() >= 32) {
@@ -316,12 +323,12 @@ void readOutDoorPms() {
     outDoorPms[0] = false;
   }
   String outDoorPMS = String("OUT: ") + String(outDoorPms[3]) + String(" ") + String(outDoorPms[2]) + String(" ") + String(outDoorPms[1]);
-  lcdrender(1, outDoorPMS);
+  lcdrender(0, 1, outDoorPMS);
+  Serial.println(outDoorPMS);
 }
 
-void lcdrender(int y, String text) {
-  lcd.setCursor(0, y);
-  lcd.print("                ");
-  lcd.setCursor(0, y);
+//LCD
+void lcdrender(int x, int y, String text) {
+  lcd.setCursor(x, y);
   lcd.print(text);
 }

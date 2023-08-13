@@ -1,16 +1,13 @@
 #include <MHZ19PWM.h>
+#include <C302_Steam_Air_MH-Z19B_CO2.h>
 
 const int MHZ19_Pin = 2;
 MHZ19PWM mhz(MHZ19_Pin, MHZ_CONTINUOUS_MODE);
 int CO2;
 
 void setup() {
-  Serial.begin(115200);
+  Serial.begin(9600);
   Serial.println(F("Starting..."));
-
-  delay(2000);
-
-  mhz.useLimit(5000);
 }
 
 void loop() {
